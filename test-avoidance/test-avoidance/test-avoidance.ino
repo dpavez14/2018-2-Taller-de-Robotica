@@ -8,8 +8,8 @@
 #include <protocol.h>
 
 // Sensor variables
-const int pwPin1 = 3; // Altura (inferior)
-const int pwPin2 = 4; // Distancia (frontal)
+const int pwPin1 = 5; // Altura (inferior)
+const int pwPin2 = 0; // Distancia (frontal)
 int sensor_1, altitude, sensor_2, distance;
 int min_alt = 16;
 int max_alt = 645;
@@ -36,6 +36,7 @@ void Read_Altitude_Sensor(){
 void Read_Distance_Sensor(){
   sensor_2 = pulseIn(pwPin2, HIGH); // Devuelve distancia en milimetros
   distance = sensor_2/10;           // Distancia en centimetros
+  Serial.println(distance);
 }
 
 void Mav_Send_Current_Altitude() {
