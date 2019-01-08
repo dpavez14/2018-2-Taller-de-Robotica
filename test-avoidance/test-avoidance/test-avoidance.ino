@@ -10,6 +10,7 @@
 typedef enum { //Used to follow mavlink Mission Protocol https://mavlink.io/en/services/mission.html
   HEARTBEAT_WAIT,
   HEARTBEAT_RECEIVED,
+  HEARTBEAT_DONE,
   DOWNLOAD_MISSION_COUNT_WAIT,
   DOWNLOAD_MISSION_COUNT_RECEIVED,
   DOWNLOAD_MISSION_ITEM_WAIT,
@@ -64,6 +65,7 @@ void Mav_Send_Heartbeat() {
   mavlink_msg_heartbeat_pack(0xFF, 0, &msg, MAV_TYPE_QUADROTOR,  MAV_AUTOPILOT_INVALID, 0, 0, MAV_STATE_STANDBY);
   uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
   Serial.write(buf, len);
+  msg_state = HEARTBEAT_DONE;
 }
 
 void Mav_Send_Current_Altitude() {
@@ -91,88 +93,49 @@ void Mav_Send_Current_Altitude() {
   Serial.write(buf, len);
 }
 
-
-/*
 void Mav_Avoid_Obstacles(){
   mavlink_message_t msg;
   uint8_t buf[MAVLINK_MAX_PACKET_LEN];
 
   Read_Distance_Sensor();
 
-  if (distance <= 100){
-    mavlink_mission_current_t current;
-    mavlink_msg_mission_current_decode(&msg, &current);
-    int actual = current.seq;
-
-    mavlink_mission_count_t count;
-    mavlink_msg_mission_count_decode(&msg, &count);
-    int cantidad =  count.count;
-
-    mavlink_message_t list;
-
-    mavlink_msg_mission_request_partial_list_pack(0xFF, 0xBE, &list, 1, 1, actual, cantidad, 0);
-    uint16_t len = mavlink_msg_to_send_buffer(buf, &list);
-    Serial.write(buf, len);
-
-    mavlink_msg_mission_clear_all_pack(0xFF, 0xBE, &msg, 1, 1, 255);
+  if (distance <= 200){ //2m from the obstacle
+    // Download mission
+    mavlink_msg_mission_request_list_pack(0xFF, 0xBE, &msg, 1, 1, MAV_MISSION_TYPE_MISSION);
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
     Serial.write(buf, len);
-
+    msg_state = DOWNLOAD_MISSION_COUNT_WAIT;
   }
-
-  if (!stopped){ // Esta avanzando
-    if (distance <= 100){ // Parar
-
-
-      
-      mavlink_msg_command_long_pack(0xFF, 0xBE, &msg, 1, 1, 178, 1, 0, 0, 0, 0, 0, 0, 0);
-      uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-      Serial.write(buf, len);
-      
-      stopped = true;
-    }
-    else { // Seguir avanzando
-      mavlink_msg_command_long_pack(0xFF, 0xBE, &msg, 1, 1, 178, 1, 0, 5, 0, 0, 0, 0, 0);
-      uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-      Serial.write(buf, len);
-    }
+  if (msg_state == DOWNLOAD_DONE){
+    // Clear old mission
+    mavlink_msg_mission_clear_all_pack(0xFF, 0xBE, &msg, 1, 1, MAV_MISSION_TYPE_MISSION);
+    uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    Serial.write(buf, len);
+    msg_state = MISSION_CLEAR_ALL_WAIT;
   }
-  
-  // Up
-  else if(stopped){ // Esta detenido
-    if(distance <= 150){ //Subir mientras la distancia al obstaculo no supere 1.5 metros
-      double alt = altitude/100 + 0.5; //Subir medio metro más
-      mavlink_msg_command_long_pack(0xFF, 0xBE, &msg, 1, 1, 186, 1, alt, MAV_FRAME_MISSION, 0, 0, 0, 0, 0);
-      uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-      Serial.write(buf, len);
+  if (msg_state == MISSION_CLEAR_ALL_DONE){
+    // Modify the list of waypoints
 
-      if(stop_cont == 0){
-        initial_alt = altitude;
-      }
-      
-      stop_cont++;
-    }
-    
-    else { // Avanzar, esperar y bajar
-      mavlink_msg_command_long_pack(0xFF, 0xBE, &msg, 1, 1, 178, 1, 0, 5, 0, 0, 0, 0, 0);
-      uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-      Serial.write(buf, len);
-      
-      delay(1000);
+    // Remove waypoints already done
 
-      mavlink_message_t msg2;
-      uint8_t buf2[MAVLINK_MAX_PACKET_LEN];
-      mavlink_msg_command_long_pack(0xFF, 0xBE, &msg2, 1, 1, 186, 1, initial_alt, MAV_FRAME_MISSION, 0, 0, 0, 0, 0); //Altura
-      uint16_t len2 = mavlink_msg_to_send_buffer(buf2, &msg2);
-      Serial.write(buf2, len2);
+    // Climb 2m
 
-      stop_cont = 0;
+    // Change horizontal speed (to know how fast the drone is going)
 
-      stopped = false;
-    }
-    
+    // Go forward 4m
+
+    // Go down 2m
+
+    // Continue with the mission
+
+    // Upload mission with the new list
+    // list_post = index of the last element of the list
+    mavlink_msg_mission_count_pack(0xFF, 0xBE, &msg, 1, 1, list_pos + 1, MAV_MISSION_TYPE_MISSION);
+    uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+    Serial.write(buf, len);
   }
-}*/
+}
+
 
 void Mav_Receive() {
   mavlink_message_t msg;
@@ -279,13 +242,18 @@ void loop() {
 
   if(msg_state == HEARTBEAT_RECEIVED)
     Mav_Send_Heartbeat();
+
+  if(msg_state == HEARTBEAT_DONE){
+    // Send current altitude
+    Mav_Send_Current_Altitude();
   
-  // Send current altitude
-  Mav_Send_Current_Altitude();
-
-  // Over 50cm try to avoid obstacles
-  if(altitude > 50){ // Current altitude already obtained by Mav_Send_Current_Altitude()
-    Mav_Avoid_Obstacles();
+    // Over 150cm try to avoid obstacles (reduce errors of the measurement of the sensors, like detect the floor with the frontal sensor)
+    if(altitude > 150){ // Current altitude already obtained by Mav_Send_Current_Altitude()
+      Mav_Avoid_Obstacles();
+    }
   }
-
+  //Reset to HEARTBEAT_WAIT if nothing is detected or if the mission upload (with the new waypoints) is already done
+  if (msg_state == HEARTBEAT_DONE || msg_state == UPLOAD_MISSION_DONE){
+    msg_state = HEARTBEAT_WAIT;
+  }
 }
