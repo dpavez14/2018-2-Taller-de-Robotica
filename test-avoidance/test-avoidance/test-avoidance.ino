@@ -100,14 +100,14 @@ void Mav_Avoid_Obstacles(){
   Read_Distance_Sensor();
 
   if (distance <= 200){ //2m from the obstacle
-    // Download mission
+    // Download mission, following Mission Protocol https://mavlink.io/en/services/mission.html
     mavlink_msg_mission_request_list_pack(0xFF, 0xBE, &msg, 1, 1, MAV_MISSION_TYPE_MISSION);
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
     Serial.write(buf, len);
     msg_state = DOWNLOAD_MISSION_COUNT_WAIT;
   }
   if (msg_state == DOWNLOAD_DONE){
-    // Clear old mission
+    // Clear old mission, following Mission Protocol https://mavlink.io/en/services/mission.html
     mavlink_msg_mission_clear_all_pack(0xFF, 0xBE, &msg, 1, 1, MAV_MISSION_TYPE_MISSION);
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
     Serial.write(buf, len);
@@ -115,8 +115,10 @@ void Mav_Avoid_Obstacles(){
   }
   if (msg_state == MISSION_CLEAR_ALL_DONE){
     // Modify the list of waypoints
+    // http://ardupilot.org/copter/docs/mission-command-list.html
+    // https://mavlink.io/en/messages/common.html#mavlink-commands-mavcmd
 
-    // Remove waypoints already done
+    // If the first command is a Takeoff, add to the new list of mission commands (with a lower altitude, eg. 1m)
 
     // Climb 2m
 
@@ -128,7 +130,7 @@ void Mav_Avoid_Obstacles(){
 
     // Continue with the mission
 
-    // Upload mission with the new list
+    // Upload mission with the new list, following Mission Protocol https://mavlink.io/en/services/mission.html
     // list_post = index of the last element of the list
     mavlink_msg_mission_count_pack(0xFF, 0xBE, &msg, 1, 1, list_pos + 1, MAV_MISSION_TYPE_MISSION);
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
