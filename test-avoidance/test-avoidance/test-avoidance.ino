@@ -31,7 +31,7 @@ typedef enum {
   DOWNLOAD_MISSION_COUNT_WAIT,
   DOWNLOAD_MISSION_COUNT_RECEIVED,
   DOWNLOAD_MISSION_ITEM_WAIT,
-  DOWNLOAD_DONE,
+  DOWNLOAD_MISSION_DONE,
   MISSION_CLEAR_ALL_WAIT,
   MISSION_CLEAR_ALL_DONE,
   UPLOAD_MISSION_REQUEST_WAIT,
@@ -41,8 +41,8 @@ typedef enum {
 
 mav_mission_state mission_state = HEARTBEAT_WAIT;
 int current_item = 0; //Current mission item
-int mission_count = 0:
-mavlink_mission_item_int_t[20] mission_items_list; //Max. 20 mission items, use MISSION_ITEM_INT to reduce precision errors
+int mission_count = 0;
+mavlink_mission_item_int_t[20] mission_items_list; 
 mavlink_mission_item_int_t[20] new_mission_items_list;
 int new_mission_count = 0;
 int last_pos = 0;
@@ -110,14 +110,14 @@ void Mav_Avoid_Obstacles(){
 
   Read_Distance_Sensor();
 
-  if (distance <= 200){ //2m from the obstacle
+  if (distance <= 200 && mission_state == HEARTBEAT_DONE){ //2m from the obstacle
     // Download mission, following Mission Protocol https://mavlink.io/en/services/mission.html
     mavlink_msg_mission_request_list_pack(0xFF, 0xBE, &msg, 1, 1, MAV_MISSION_TYPE_MISSION);
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
     Serial.write(buf, len);
     mission_state = DOWNLOAD_MISSION_COUNT_WAIT;
   }
-  if (mission_state == DOWNLOAD_DONE){
+  if (mission_state == DOWNLOAD_MISSION_DONE){
     // Clear old mission, following Mission Protocol https://mavlink.io/en/services/mission.html
     mavlink_msg_mission_clear_all_pack(0xFF, 0xBE, &msg, 1, 1, MAV_MISSION_TYPE_MISSION);
     uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
@@ -134,12 +134,12 @@ void Mav_Avoid_Obstacles(){
     start.command = MAV_CMD_MISSION_START;
     new_mission_count++
 
-    // If the first command is a Takeoff, add to the new list of mission commands (with a lower altitude, eg. 1m)
-    if(mission_items_list[0].command == MAV_CMD_NAV_TAKEOFF){
+    // Not neccesary, because the RTL don't use the TAKEOFF as I thought
+    /*if(mission_items_list[0].command == MAV_CMD_NAV_TAKEOFF){
       new_mission_items_list[new_mission_count] = mission_items_list[0];
       new_mission_items_list[new_mission_count].seq = new_mission_count;
       new_mission_count++;
-    }
+    }*/
     
     // Climb 2m from the current position
     mavlink_mission_item_int_t climb = mission_items_list[current_item]; // 
@@ -177,9 +177,11 @@ void Mav_Receive() {
     if(mavlink_parse_char(MAVLINK_COMM_0, c, &msg, &status)) {
       switch(msg.msgid) {
         case MAVLINK_MSG_ID_HEARTBEAT: //0
-          mavlink_heartbeat_t hb;
-          mavlink_msg_heartbeat_decode(&msg, &hb);
-          //Tal vez implementar un timeout en caso de no recibir este mensage por mucho tiempo
+          if (mission_state == HEARTBEAT_WAIT){
+            mavlink_heartbeat_t hb;
+            mavlink_msg_heartbeat_decode(&msg, &hb);
+            mission_state == HEARTBEAT_RECEIVED
+          }
           break;
 
         //Follow Mission Protocol https://mavlink.io/en/services/mission.html
@@ -195,61 +197,71 @@ void Mav_Receive() {
           current_item = ir.seq;
           break;
           
-        case MAVLINK_MSG_ID_MISSION_COUNT && mission_state == DOWNLOAD_MISSION_COUNT_WAIT: //44
-          mavlink_mission_count_t mc;
-          mavlink_msg_mission_count_decode(&msg, &mc);
-          mission_count = mc.count;
-
-          //Send first request
-          mavlink_msg_mission_request_int_pack(0xFF, 0xBE, &msg, 1, 1, last_pos, MAV_MISSION_TYPE_MISSION);
-          uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-          Serial.write(buf, len);
-          
-          mission_state == DOWNLOAD_MISSION_ITEM_WAIT;
-          break;
-          
-        case MAVLINK_MSG_ID_MISSION_ITEM_INT && mission_state == DOWNLOAD_MISSION_ITEM_WAIT: //73 use MISSION_ITEM_INT over MISSION_ITEM to avoid/reduce precision errors https://mavlink.io/en/services/mission.html#command_message_type
-          mavlink_mission_item_int_t item;
-          mavlink_msg_mission_count_decode(&msg, &item);
-          mission_items_list[last_pos++] = item;
-          
-          if(mission_count == last_pos){ //All the mission item where received
-            // Send ACK
-            mavlink_mission_ack_t ack;
-            mavlink_msg_mission_ack_pack(0xFF, 0xBE, &msg, 1, 1, MAV_MISSION_ACCEPTED, MAV_MISSION_TYPE_MISSION);
-            uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-            Serial.write(buf, len);
-            mission_state == DOWNLOAD_DONE;
-            last_pos--; //To keep as the last index, return to 0 when the items are sent back to the pixfalcon
-          } 
-          else { //Send next request
+        case MAVLINK_MSG_ID_MISSION_COUNT: //44
+          if (mission_state == DOWNLOAD_MISSION_COUNT_WAIT){
+            mavlink_mission_count_t mc;
+            mavlink_msg_mission_count_decode(&msg, &mc);
+            mission_count = mc.count;
+  
+            //Send first request
             mavlink_msg_mission_request_int_pack(0xFF, 0xBE, &msg, 1, 1, last_pos, MAV_MISSION_TYPE_MISSION);
             uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
             Serial.write(buf, len);
+            
+            mission_state == DOWNLOAD_MISSION_ITEM_WAIT;
+          }
+          
+          break;
+          
+        case MAVLINK_MSG_ID_MISSION_ITEM_INT: //73 use MISSION_ITEM_INT over MISSION_ITEM to avoid/reduce precision errors https://mavlink.io/en/services/mission.html#command_message_type
+          if(mission_state == DOWNLOAD_MISSION_ITEM_WAIT){
+            mavlink_mission_item_int_t item;
+            mavlink_msg_mission_count_decode(&msg, &item);
+            mission_items_list[last_pos++] = item;
+            
+            if(mission_count == last_pos){ //All the mission item where received
+              // Send ACK
+              mavlink_mission_ack_t ack;
+              mavlink_msg_mission_ack_pack(0xFF, 0xBE, &msg, 1, 1, MAV_MISSION_ACCEPTED, MAV_MISSION_TYPE_MISSION);
+              uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+              Serial.write(buf, len);
+              mission_state == DOWNLOAD_MISSION_DONE;
+              last_pos--; //To keep as the last index, return to 0 when the items are sent back to the pixfalcon
+            } 
+            else { //Send next request
+              mavlink_msg_mission_request_int_pack(0xFF, 0xBE, &msg, 1, 1, last_pos, MAV_MISSION_TYPE_MISSION);
+              uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+              Serial.write(buf, len);
+            }
           }
           break;
 
-        case MAVLINK_MSG_ID_MISSION_ACK && mission_state == MISSION_CLEAR_ALL_WAIT:
-          mission_state == MISSION_CLEAR_ALL_DONE;
+        case MAVLINK_MSG_ID_MISSION_ACK:
+          if(mission_state == MISSION_CLEAR_ALL_WAIT)
+            mission_state == MISSION_CLEAR_ALL_DONE;
           break;
 
-        case MAVLINK_MSG_ID_MISSION_REQUEST_INT && mission_state == UPLOAD_MISSION_REQUEST_WAIT:
-          mavlink_mission_request_int_t request;
-          mavlink_msg_mission_request_int_decode(&msg, &request);
-          //Send the requested item
-          mavlink_mission_item_int_t item = mission_items_list[request.seq];
-          mavlink_msg_mission_item_int_encode(0xFF, 0xBE, &msg, &item);
-          uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
-          Serial.write(buf, len);
-
-          if(last_pos == request.seq){ //Last request
-            mission_state == UPLOAD_MISSION_ACK_WAIT;
+        case MAVLINK_MSG_ID_MISSION_REQUEST_INT:
+          if(mission_state == UPLOAD_MISSION_REQUEST_WAIT){
+            mavlink_mission_request_int_t request;
+            mavlink_msg_mission_request_int_decode(&msg, &request);
+            //Send the requested item
+            mavlink_mission_item_int_t item = mission_items_list[request.seq];
+            mavlink_msg_mission_item_int_encode(0xFF, 0xBE, &msg, &item);
+            uint16_t len = mavlink_msg_to_send_buffer(buf, &msg);
+            Serial.write(buf, len);
+  
+            if(last_pos == request.seq){ //Last request
+              mission_state == UPLOAD_MISSION_ACK_WAIT;
+            }
           }
           break;
 
-        case MAVLINK_MSG_ID_MISSION_ACK && mission_state == UPLOAD_MISSION_ACK_WAIT:
-          last_pos = 0;
-          mission_state == UPLOAD_MISSION_DONE;
+        case MAVLINK_MSG_ID_MISSION_ACK:
+          if (mission_state == UPLOAD_MISSION_ACK_WAIT){
+            reset_mavlink_variables();
+            mission_state == UPLOAD_MISSION_DONE;
+          }
           break;
           
         default:
@@ -284,8 +296,22 @@ void loop() {
       Mav_Avoid_Obstacles();
     }
   }
+  if(mission_state ==  DOWNLOAD_MISSION_DONE ||  mission_state ==  MISSION_CLEAR_ALL_DONE){
+    Mav_Avoid_Obstacles();
+  }
+  
   //Reset to HEARTBEAT_WAIT if nothing is detected or if the mission upload (with the new waypoints) is already done
   if (mission_state == HEARTBEAT_DONE || mission_state == UPLOAD_MISSION_DONE){
     mission_state = HEARTBEAT_WAIT;
   }
+
+}
+
+void reset_mavlink_variables() {
+  current_item = 0;
+  mission_count = 0;
+  mission_items_list = []; 
+  new_mission_items_list = [];
+  new_mission_count = 0;
+  last_pos = 0;
 }
